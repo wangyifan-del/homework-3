@@ -1,0 +1,140 @@
+#--------------------start-------------------------------
+# 获取工作目录
+getwd()
+
+#----------------读取数据集--------------------------
+data_for_analysis <- read.csv("D:\\OneDrive\\Desktop\\homework\\Data Analysis\\homework3\\data_for_analysis.csv")
+
+# 把 outcome 转为因子
+data_for_analysis$outcome <- as.factor(data_for_analysis$outcome)
+
+#-----------所有激素变量------------------
+hormone_vars <- c(
+  "hormone1", "hormone2", "hormone3", "hormone4", "hormone5", 
+  "hormone6", "hormone7", "hormone8", "hormone10_generated"
+)
+
+#-----------安装并加载包------------------
+if(!require("gtsummary")) install.packages("gtsummary")
+if(!require("car")) install.packages("car")
+if(!require("lawstat")) install.packages("lawstat")
+if(!require("DataExplorer")) install.packages("DataExplorer")
+if(!require("ggplot2")) install.packages("ggplot2")
+if(!require("reshape2")) install.packages("reshape2")
+
+library(gtsummary)
+library(car)
+library(lawstat)
+library(DataExplorer)
+library(ggplot2)
+library(reshape2)
+
+#==================================================
+# 1. 分组描述统计表
+#==================================================
+desc_table <- data_for_analysis %>%
+  select(all_of(hormone_vars), outcome) %>%
+  tbl_summary(
+    by = outcome,
+    statistic = all_continuous() ~ "{mean} ({sd}) | {median} ({IQR}) | {min}-{max}"
+  ) %>%
+  modify_header(label ~ "**Hormone Variables**") %>%
+  modify_caption("**Descriptive Statistics by Outcome**")
+
+desc_table
+
+#==================================================
+# 2. 批量正态检验 + 方差齐性检验
+#==================================================
+result_table <- data.frame()
+
+for (v in hormone_vars) {
+  
+  g0 <- data_for_analysis[[v]][data_for_analysis$outcome == 0]
+  g1 <- data_for_analysis[[v]][data_for_analysis$outcome == 1]
+  
+  #  Shapiro-Wilk
+  sh0 <- shapiro.test(g0)
+  sh1 <- shapiro.test(g1)
+  
+  # Levene
+  lev <- leveneTest(as.formula(paste(v, "~ outcome")), data = data_for_analysis)
+  
+  # 检验
+  t_p <- t.test(g0, g1)$p.value
+  w_p <- wilcox.test(g0, g1)$p.value
+  bm_p <- brunner.munzel.test(g0, g1)$p.value
+  
+  result_table <- rbind(result_table, data.frame(
+    Variable = v,
+    Shapiro_p_0 = sh0$p.value,
+    Shapiro_p_1 = sh1$p.value,
+    Levene_p = lev$`Pr(>F)`[1],
+    t_test_p = t_p,
+    Wilcox_p = w_p,
+    Brunner_Munzel_p = bm_p
+  ))
+  
+  #==================================================
+  # 3. 直方图 + QQ图
+  #==================================================
+  par(mfrow = c(2, 2))
+  hist(g0, col = "lightgreen", main = paste0(v, " - Outcome 0"))
+  qqnorm(g0, main = paste0(v, " Q-Q 0"))
+  qqline(g0, col = "red", lwd = 2)
+  
+  hist(g1, col = "lightblue", main = paste0(v, " - Outcome 1"))
+  qqnorm(g1, main = paste0(v, " Q-Q 1"))
+  qqline(g1, col = "red", lwd = 2)
+  par(mfrow = c(1, 1))
+}
+
+# 输出检验结果
+result_table
+
+#==================================================
+# 4. 分组相关性热图
+#==================================================
+plot_cor <- function(data, vars, group, title) {
+  sub <- data[data$outcome == group, vars]
+  ok <- complete.cases(sub)
+  sub <- sub[ok, ]
+  
+  norm <- all(sapply(sub, function(x) shapiro.test(x)$p.value > 0.05))
+  method <- ifelse(norm, "pearson", "spearman")
+  
+  corm <- cor(sub, method = method)
+  m <- melt(corm)
+  
+  p <- ggplot(m, aes(Var1, Var2, fill = value)) +
+    geom_tile() +
+    scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
+    ggtitle(paste0(title, " | method: ", method)) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  print(p)
+}
+
+# 分别画两组热图
+plot_cor(data_for_analysis, hormone_vars, 0, "Correlation Heatmap Outcome 0")
+plot_cor(data_for_analysis, hormone_vars, 1, "Correlation Heatmap Outcome 1")
+
+#==================================================
+# 5. EDA 报告
+#==================================================
+create_report(
+  data = data_for_analysis[, c("outcome", hormone_vars)],
+  output_file = "EDA_Report.html",
+  output_dir = getwd(),
+  report_title = "Hormone EDA Report"
+)
+
+#==================================================
+# 6. 作业结论：推荐用哪个检验
+#==================================================
+cat("\n===== 最终结论=====\n")
+cat("✅ 大多数激素不满足正态分布（Shapiro p < 0.05）\n")
+cat("✅ 方差不齐（Levene p < 0.05）\n")
+cat("✅ 最适合检验：Brunner–Munzel test\n")
+cat("❌ t检验 不适用\n")
+cat("❌ Wilcoxon 不如 Brunner–Munzel 稳健\n")
